@@ -14,9 +14,9 @@ def main(
     data_folder: str = "~/data", output_folder: str = './cifar10-cm',                               # Data & IO
     batch_size: int = 64, device: str = 'cuda', seed: int = 0,                                      # Training basic
     img_size: int = 32, img_channels : int = 3,                                                     # Image shape
-    iter_log: int = 100, iter_fig: int = 500, iter_save : int = 10000, iter_train : int = 80000,  # Time stage
+    iter_log: int = 100, iter_fig: int = 500, iter_save : int = 10000, iter_train : int = 800000,   # Time stage
     start_scales: int = 2, end_scales: int = 150, start_ema: float = 0.95,                          # EDM hyper-parameters
-    sigma_max: float = 80.0, sigma_min: float = 0.002, rho: float = 7.0, sigma_data: float = 0.5    # EDM hyper-parameters
+    sigma_max: float = 80.0, sigma_min: float = 0.002, rho: float = 7.0, sigma_data: float = 0.5,   # EDM hyper-parameters
 ):
     ### For reproduce result
     random.seed(seed)
@@ -42,7 +42,7 @@ def main(
     model = UNetModel(image_size=img_size, in_channels=img_channels, model_channels=128, out_channels=img_channels, num_res_blocks=2, attention_resolutions=[32,16,8], num_heads=4).to(device)
     model_ema = UNetModel(image_size=img_size, in_channels=img_channels, model_channels=128, out_channels=img_channels, num_res_blocks=2, attention_resolutions=[32,16,8], num_heads=4).to(device)
     model_ema.load_state_dict(copy.deepcopy(model.state_dict()))
-    optim = torch.optim.Adam(model.parameters(), lr=4e-4)
+    optim = torch.optim.RAdam(model.parameters(), lr=1e-4)
 
     ### Obtain schedule function for EMA decay rate schedule \mu(.) & step schedule N(.)
     ### Formula can be referred from Consistency Models paper Appendix C. page 26. 
@@ -85,10 +85,10 @@ def main(
             x_t1 = x + torch.randn_like(x) * t1[..., None, None, None]
 
             # Denoise with online network
-            distiller = forward(model, x_t1, t1)
+            distiller = forward(model, x_t1, t1, sigma_data=sigma_data)
 
             # Construct t_n noisy input via Euler solver (Might can construct directly)
-            x_t2 = x_t1 + (x_t1 - x) / t1[..., None, None, None] * (t2 - t1)[..., None, None, None].detach()
+            x_t2 = (x_t1 + (x_t1 - x) / t1[..., None, None, None] * (t2 - t1)[..., None, None, None]).detach()
 
             # Denoise with target network
             distiller_target = forward(model_ema, x_t2, t2, sigma_data=sigma_data).detach()
@@ -96,7 +96,7 @@ def main(
             # Compute weighted loss with consistency loss (weight definition is described in EDM paper page 3 Table 1)
             weightings = 1.0 / t1**2 + 1.0 / sigma_data**2
             diffs = (distiller - distiller_target) ** 2
-            loss = (torch.sum(diffs, dim=(1, 2, 3)) * weightings).mean()
+            loss = (torch.mean(diffs, dim=(1, 2, 3)) * weightings).mean()
 
             # Update online network
             optim.zero_grad()
@@ -104,8 +104,9 @@ def main(
             optim.step()
 
             # Update target network manually and accumulate global step (notation is k in Consistency Model paper Algorithm 3)
-            for targ, src in zip(model_ema.parameters(), model.parameters()):
-                targ.detach().mul_(ema).add_(src, alpha=1 - ema)
+            with torch.no_grad():
+                for targ, src in zip(model_ema.parameters(), model.parameters()):
+                    targ.detach().mul_(ema).add_(src, alpha=1 - ema)
 
             ### Log & save
             if curr_iter % iter_log == 0:
@@ -113,10 +114,11 @@ def main(
             if curr_iter % iter_save == 0:
                 torch.save(model_ema.state_dict(), os.path.join(output_folder, '{}.pth'.format(str(curr_iter).zfill(6))))
             if curr_iter % iter_fig == 0:
-                out = forward(model_ema, torch.randn_like(x).to(device) * sigma_max, torch.ones(x.shape[0]).to(device) * sigma_max).clamp(-1, 1)
-                out = make_grid(out)
-                out = (out.permute(1, 2, 0) * 127.5 + 127.5).cpu().numpy().astype(np.uint8)
-                Image.fromarray(out).save(os.path.join(output_folder, '{}.jpg'.format(str(curr_iter).zfill(6))))
+                with torch.no_grad():
+                    out = forward(model_ema, torch.randn_like(x).to(device) * sigma_max, torch.ones(x.shape[0]).to(device) * sigma_max).clamp(-1, 1)
+                    out = make_grid(out)
+                    out = (out.permute(1, 2, 0) * 127.5 + 127.5).cpu().numpy().astype(np.uint8)
+                    Image.fromarray(out).save(os.path.join(output_folder, '{}.jpg'.format(str(curr_iter).zfill(6))))
             if curr_iter > iter_train + 1:
                 break
             curr_iter += 1
