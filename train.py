@@ -70,7 +70,7 @@ def main(
     curr_iter = 0
     optim.zero_grad()
     sample_z = None
-    while curr_iter < iter_train and curr_iter < 4000:
+    while curr_iter < iter_train:
         for X, Y in dataloader:
             losses = [0.0]
             for mini_batch_idx in range(accumulate_grad_batches):
