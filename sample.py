@@ -11,9 +11,10 @@ from torchvision.utils import save_image
 
 @torch.no_grad()
 def main(
-    model_path : str = './cifar10-cm/800000.pth', output_folder : str = './cifar10-cm/sample',      # Data & IO
+    model_path : str = './cifar10-cm/last.pth', output_folder : str = './cifar10-cm/sample',        # Data & IO
     batch_size : int = 64, device : str = 'cuda', num_sample : int = 64, seed : int = 0,            # Inference basic
-    img_size : int = 32, img_channels : int = 3,                                                    # Image shape
+    data_size: int = 32, data_channels : int = 3,                                                   # Data shape
+    model_channels: int = 128, use_scale_shift_norm: bool = True, resblock_updown: bool = True,     # Model setting
     grid_form : bool = True,                                                                        # Save format
     sigma_max: float = 80.0, sigma_min: float = 0.002,                                              # EDM hyper-parameters
     ):
@@ -24,7 +25,7 @@ def main(
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    model = UNetModel(image_size=img_size, in_channels=img_channels, model_channels=128, out_channels=img_channels, num_res_blocks=2, attention_resolutions=[32,16,8], num_heads=4).to(device)
+    model = UNetModel(image_size=data_size, in_channels=data_channels, model_channels=model_channels, out_channels=data_channels, num_res_blocks=2, attention_resolutions=[32,16,8], num_heads=4, use_scale_shift_norm=use_scale_shift_norm, resblock_updown=resblock_updown).to(device)
     model.load_state_dict(torch.load(model_path))
     model.eval()
 
@@ -42,7 +43,7 @@ def main(
     ### Sampling loop
     ctr = 0
     bar = tqdm(total=num_sample)
-    x_shape=[batch_size, img_channels, img_size, img_size]
+    x_shape=[batch_size, data_channels, data_size, data_size]
     while ctr < num_sample:
         with torch.no_grad():
             imgs = torch.randn(x_shape, device=device, dtype=torch.float)
